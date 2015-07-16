@@ -67,6 +67,14 @@ class BMP085(object):
 		# Load calibration values.
 		self._load_calibration()
 
+	@property
+	def i2c_address(self):
+		return self._device.address
+
+	@property
+	def i2c_bus(self):
+		return self._device.bus
+
 	def _load_calibration(self):
 		self.cal_AC1 = self._device.readS16BE(BMP085_CAL_AC1)   # INT16
 		self.cal_AC2 = self._device.readS16BE(BMP085_CAL_AC2)   # INT16
