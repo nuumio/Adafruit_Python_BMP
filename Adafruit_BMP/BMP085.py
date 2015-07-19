@@ -67,6 +67,11 @@ class BMP085(object):
 		# Load calibration values.
 		self._load_calibration()
 
+		self._temperature = 0
+		self._pressure = 0
+		self._altitude = 0
+		self._sea_level_pressure = None
+
 	@property
 	def i2c_address(self):
 		return self._device.address
@@ -74,6 +79,10 @@ class BMP085(object):
 	@property
 	def i2c_bus(self):
 		return self._device.bus
+
+	@property
+	def i2c_full_address(self):
+		return 'i2c/{}/0x{:02X}'.format(self.i2c_bus, self.i2c_address)
 
 	def _load_calibration(self):
 		self.cal_AC1 = self._device.readS16BE(BMP085_CAL_AC1)   # INT16
@@ -140,8 +149,7 @@ class BMP085(object):
 		self._logger.debug('Raw pressure 0x{0:04X} ({1})'.format(raw & 0xFFFF, raw))
 		return raw
 
-	def read_temperature(self):
-		"""Gets the compensated temperature in degrees celsius."""
+	def _update_temperature(self):
 		UT = self.read_raw_temp()
 		# Datasheet value for debugging:
 		#UT = 27898
@@ -151,10 +159,18 @@ class BMP085(object):
 		B5 = X1 + X2
 		temp = ((B5 + 8) >> 4) / 10.0
 		self._logger.debug('Calibrated temperature {0} C'.format(temp))
-		return temp
+		self._temperature = temp
 
-	def read_pressure(self):
-		"""Gets the compensated pressure in Pascals."""
+	@property
+	def temperature(self):
+		return self._temperature
+
+	def read_temperature(self):
+		"""Gets the compensated temperature in degrees celsius."""
+		self._update_temperature()
+		return self.temperature
+
+	def _update_pressure(self):
 		UT = self.read_raw_temp()
 		UP = self.read_raw_pressure()
 		# Datasheet values for debugging:
@@ -190,13 +206,47 @@ class BMP085(object):
 		X2 = (-7357 * p) >> 16
 		p = p + ((X1 + X2 + 3791) >> 4)
 		self._logger.debug('Pressure {0} Pa'.format(p))
-		return p
+		self._pressure = p
+
+	@property
+	def pressure(self):
+		return self._pressure
+
+	@property
+	def sea_level_pressure(self):
+		if self._sea_level_pressure is None:
+			return self.pressure / pow(1.0 - self.altitude/44330.0, 5.255)
+		else:
+			return self._sea_level_pressure
+
+	@sea_level_pressure.setter
+	def sea_level_pressure(self, p):
+		self._sea_level_pressure = p
+		self._altitude = None
+
+	def read_pressure(self):
+		"""Gets the compensated pressure in Pascals."""
+		self._update_pressure()
+		return self.pressure
+
+	@property
+	def altitude(self):
+		if self._altitude is None:
+			return 44330.0 * (1.0 - pow(self.pressure / self.sea_level_pressure, (1.0/5.255)))
+		else:
+			return self._altitude
+
+	@altitude.setter
+	def altitude(self, a):
+		self._altitude = a
+		self._sea_level_pressure = None
 
 	def read_altitude(self, sealevel_pa=101325.0):
 		"""Calculates the altitude in meters."""
 		# Calculation taken straight from section 3.6 of the datasheet.
 		pressure = float(self.read_pressure())
-		altitude = 44330.0 * (1.0 - pow(pressure / sealevel_pa, (1.0/5.255)))
+		self.sea_level_pressure = sealevel_pa
+		altitude = self.altitude
 		self._logger.debug('Altitude {0} m'.format(altitude))
 		return altitude
 
@@ -204,6 +254,11 @@ class BMP085(object):
 		"""Calculates the pressure at sealevel when given a known altitude in
 		meters. Returns a value in Pascals."""
 		pressure = float(self.read_pressure())
-		p0 = pressure / pow(1.0 - altitude_m/44330.0, 5.255)
+		self.altitude = altitude_m
+		p0 = self.sea_level_pressure
 		self._logger.debug('Sealevel pressure {0} Pa'.format(p0))
 		return p0
+
+	def update(self):
+		self._update_temperature()
+		self._update_pressure()
